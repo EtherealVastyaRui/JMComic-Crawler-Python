@@ -1,0 +1,149 @@
+name: 下载本子并转长图 (增强版)
+
+on:
+  workflow_dispatch:
+    inputs:
+      JM_ALBUM_IDS:
+        type: string
+        description: "本子ID（多个用-隔开，如 123-456-789）"
+        required: true
+
+      CLIENT_IMPL:
+        type: choice
+        description: "客户端类型"
+        options:
+          - api
+          - html
+        default: "api"
+        required: false
+
+      IMAGE_SUFFIX:
+        type: string
+        description: "图片格式转换（留空则保持原格式）"
+        default: ""
+        required: false
+
+      LONG_IMG_ENABLE:
+        type: boolean
+        description: "是否生成长图"
+        default: true
+        required: false
+
+      LONG_IMG_LEVEL:
+        type: choice
+        description: "长图合并维度"
+        options:
+          - album
+          - photo
+        default: "album"
+        required: false
+
+      LONG_IMG_NAME_RULE:
+        type: string
+        description: "长图文件名规则（支持 Aid, Atitle, Pid, Ptitle, Pindex）"
+        default: "[JM{Aid}]_{Atitle}"
+        required: false
+
+      DELETE_ORIGINAL:
+        type: boolean
+        description: "生成长图后删除原始图片"
+        default: true
+        required: false
+
+      ZIP_ENABLE:
+        type: boolean
+        description: "是否打包为压缩包"
+        default: true
+        required: false
+
+      ZIP_FORMAT:
+        type: choice
+        description: "压缩格式"
+        options:
+          - tar.gz
+          - zip
+        default: "zip"
+        required: false
+
+      OUTPUT_NAME:
+        type: string
+        description: "最终输出文件名（不含扩展名）"
+        default: "JM_download"
+        required: false
+
+jobs:
+  download-and-process:
+    runs-on: ubuntu-latest
+    env:
+      JM_ALBUM_IDS: ${{ github.event.inputs.JM_ALBUM_IDS }}
+      CLIENT_IMPL: ${{ github.event.inputs.CLIENT_IMPL }}
+      IMAGE_SUFFIX: ${{ github.event.inputs.IMAGE_SUFFIX }}
+      LONG_IMG_ENABLE: ${{ github.event.inputs.LONG_IMG_ENABLE }}
+      LONG_IMG_LEVEL: ${{ github.event.inputs.LONG_IMG_LEVEL }}
+      LONG_IMG_NAME_RULE: ${{ github.event.inputs.LONG_IMG_NAME_RULE }}
+      DELETE_ORIGINAL: ${{ github.event.inputs.DELETE_ORIGINAL }}
+      ZIP_ENABLE: ${{ github.event.inputs.ZIP_ENABLE }}
+      ZIP_FORMAT: ${{ github.event.inputs.ZIP_FORMAT }}
+      OUTPUT_NAME: ${{ github.event.inputs.OUTPUT_NAME }}
+
+      JM_USERNAME: ${{ secrets.JM_USERNAME }}
+      JM_PASSWORD: ${{ secrets.JM_PASSWORD }}
+
+      JM_DOWNLOAD_DIR: /home/runner/work/jmcomic/download/
+      LONG_IMG_DIR: /home/runner/work/jmcomic/long_img/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install pillow
+
+      - name: Install jmcomic
+        if: ${{ github.ref != 'refs/heads/dev' }}
+        run: |
+          pip install jmcomic -i https://pypi.org/project --upgrade
+
+      - name: Install jmcomic (local)
+        if: ${{ github.ref == 'refs/heads/dev' }}
+        run: |
+          pip install -e ./
+
+      - name: 运行下载+长图生成脚本
+        run: |
+          cd ./usage/
+          python workflow_longimg.py
+
+      - name: 打包结果
+        if: ${{ github.event.inputs.ZIP_ENABLE == 'true' }}
+        run: |
+          OUTPUT_DIR="/home/runner/work/jmcomic/output/"
+          mkdir -p "$OUTPUT_DIR"
+          OUTPUT_FILE="${OUTPUT_DIR}${{ env.OUTPUT_NAME }}.${{ env.ZIP_FORMAT }}"
+
+          if [ "${{ env.ZIP_FORMAT }}" = "zip" ]; then
+            cd "$LONG_IMG_DIR" 2>/dev/null || cd "$JM_DOWNLOAD_DIR"
+            zip -r "$OUTPUT_FILE" ./
+          else
+            cd "$LONG_IMG_DIR" 2>/dev/null || cd "$JM_DOWNLOAD_DIR"
+            tar -zcvf "$OUTPUT_FILE" ./
+          fi
+
+          echo "OUTPUT_FILE=$OUTPUT_FILE" >> $GITHUB_ENV
+
+      - name: 上传结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: "${{ env.OUTPUT_NAME }}"
+          path: |
+            ${{ env.LONG_IMG_DIR }}
+            ${{ env.OUTPUT_FILE }}
+          if-no-files-found: warn
+          retention-days: 90
